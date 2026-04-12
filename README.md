@@ -4,7 +4,7 @@ This repository now contains a full PostgreSQL + Python implementation for the C
 
 ## Files
 
-- `er_diagram.mmd` - Task 1 E-R diagram source (Mermaid)
+- `ER_diagram.png` - Task 1 E-R diagram source
 - `schema.sql` - normalized database DDL (with `ticket_order` and split ticket model)
 - `import_data.py` - imports all CSV data from `Archive/`
 - `cli.py` - command-line CRUD and query operations
