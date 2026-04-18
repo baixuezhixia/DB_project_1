@@ -37,23 +37,23 @@ ORDER BY f.flight_number;
 
 -- Task 3.2 #5: Given date + departure city + arrival city, list tickets
 -- ordered by ascending economy price.
-SELECT
-    f.departure_time_local AS departure_time,
-    f.arrival_time_local AS arrive_time,
-    f.arrival_day_offset,
-    src_air.airport_name AS departure_airport_name,
-    dst_air.airport_name AS arrival_airport_name,
-    ti.economy_price
+SELECT f.departure_time_local AS departure_time,
+       f.arrival_time_local   AS arrive_time,
+       f.arrival_day_offset,
+       src_air.airport_name   AS departure_airport_name,
+       dst_air.airport_name   AS arrival_airport_name,
+       ti.economy_price
 FROM ticket_inventory ti
-JOIN flight f ON f.flight_id = ti.flight_id
-JOIN airport src_air ON src_air.airport_id = f.source_airport_id
-JOIN city src_city ON src_city.city_id = src_air.city_id
-JOIN airport dst_air ON dst_air.airport_id = f.destination_airport_id
-JOIN city dst_city ON dst_city.city_id = dst_air.city_id
+         JOIN flight f ON f.flight_id = ti.flight_id
+         JOIN airport src_air ON src_air.airport_id = f.source_airport_id
+         JOIN city src_city ON src_city.city_id = src_air.city_id
+         JOIN airport dst_air ON dst_air.airport_id = f.destination_airport_id
+         JOIN city dst_city ON dst_city.city_id = dst_air.city_id
 WHERE ti.flight_date = :flight_date
   AND src_city.city_name = :departure_city
   AND dst_city.city_name = :arrival_city
 ORDER BY ti.economy_price ASC;
+
 
 -- Task 3.2 #6: Continue #5 and add departure_time after xxx
 -- and arrival_time before xxx (same-day arrival).

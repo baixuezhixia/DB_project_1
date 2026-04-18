@@ -28,15 +28,11 @@
 
 ### Diagramming tool
 
-The E-R diagram was created using **Mermaid** (the source is in `er_diagram.mmd`). Mermaid is an open-source, text-based diagramming language that can be rendered by many tools, including the Mermaid Live Editor (https://mermaid.live) and GitHub Markdown.
+TO BE DONE
 
 ### E-R Diagram
 
-> *Attach a screenshot of the rendered diagram here. Generate it from `er_diagram.mmd` using the Mermaid Live Editor or any Mermaid-compatible renderer, then paste the image below.*
-
-```
-[Insert E-R diagram screenshot here]
-```
+![alt text](<ER_diagram (1).png>)
 
 ### Entity and Relationship Overview
 
@@ -426,13 +422,74 @@ ORDER BY ti.economy_price ASC;
 
 ---
 
-### Task 3.3 — Advanced Requirements (10 %)
+### Task 3.3 - Advanced Requirements (10 %)
 
-> *(Optional — describe any of the following you have implemented, including test environment, procedure, and measured time costs.)*
->
-> - **Cross-platform import:** `import_data.py` uses only standard Python path handling (`pathlib.Path`) and has been tested on Linux. Running on Windows or macOS requires no code changes, only ensuring the PostgreSQL connection parameters are correct.  
-> - **OpenGauss:** The SQL dialect used in `schema.sql` and all queries is standard PostgreSQL SQL; switching to OpenGauss requires only changing the `psycopg2` connection parameters (and possibly the `psycopg2` driver to `psycopg2-opengauss`).  
-> - **Import efficiency:** All inserts use `psycopg2.extras.execute_values` for bulk batching, which significantly reduces round-trips compared to single-row inserts. The entire import (5 CSV files) completes in well under 60 seconds on a standard laptop.
+This section reports the completion status of advanced requirements #2, #3, #4, and #5.
+
+| Advanced requirement | Status | Evidence |
+|---|---|---|
+| #2 Cross-system import | Completed | The same import script was tested successfully on Windows 11 and WSL2/Linux. |
+| #3 Other database / OpenGauss experiment | Not completed | OpenGauss was not installed or tested, so this report does not claim completion of this item. |
+| #4 Different or larger data volumes | Completed | The largest input file, `tickets.csv`, contains 108820 rows, and all ticket rows were imported into `ticket_inventory`. |
+| #5 Efficient import design | Completed | The import uses batch insertion, ticket-table splitting, deduplication before upsert, and measured runtime comparison. |
+
+**Test environment.** The import was tested on Windows 11 64-bit with Python 3.10.13 and on
+WSL2/Linux with Python 3.10.12. Both systems used the same source code and connected to the
+PostgreSQL database through `psycopg2`. The WSL2 environment was:
+
+![alt text](image.png)
+
+The CSV input sizes were:
+
+| CSV file | Rows |
+|---|---:|
+| `airline.csv` | 88 |
+| `airport.csv` | 204 |
+| `passenger.csv` | 1000 |
+| `region.csv` | 261 |
+| `tickets.csv` | 108820 |
+
+**Procedure.** A clean database named `db_project_1` was created in PostgreSQL. Then the import was
+executed from PowerShell:
+
+```powershell
+python import_data.py --host localhost --port 5432 --user postgres --password <password> --database db_project_1
+```
+
+The script first executes `schema.sql`, then imports the source tables in foreign-key dependency
+order: `region`, `city`, `airport`, `airline`, `passenger`, `flight`, and `ticket_inventory`.
+During import, one airport row with an invalid IATA code was skipped as dirty data.
+
+**Result.** The successful import produced the following final table sizes:
+
+![alt text](image-1.png)
+
+**Efficiency design.** The import uses `psycopg2.extras.execute_values` for batch inserts instead of
+inserting rows one by one. This reduces database round trips, which is especially important for
+the 108820 ticket rows. The script also deduplicates ticket inventory by `(flight_id, flight_date)`
+before bulk upsert, avoiding repeated conflict updates inside the same batch. The ticket table is
+split into `flight` and `ticket_inventory`, so repeated route/schedule information is stored once in
+`flight`, while date-specific price and remaining-seat information is stored in `ticket_inventory`.
+
+**Cross-system and measured time cost.** The import time was measured on Windows from PowerShell
+and on WSL2/Linux using the shell `time` command.
+
+```powershell
+Measure-Command { python import_data.py --host localhost --port 5432 --user postgres --password <password> --database db_project_1 }
+```
+![alt text](image-2.png)
+
+```bash
+time python3 import_data.py --host localhost --port 5432 --user postgres --password <password> --database db_project_1
+```
+![alt text](image-3.png)
+
+| System | Python | Runtime | Result |
+|---|---|---:|---|
+| Windows 11 64-bit | Python 3.10.13 | 9.2861554 seconds | Success |
+| WSL2/Linux | Python 3.10.12 | 5.548 seconds | Success |
+
+The same import script ran successfully on both systems without source-code changes.
 
 ---
 
@@ -603,3 +660,4 @@ project1_submission/
 ```
 
 > **Submission reminder:** export this document to PDF, ensure screenshots are embedded, verify page count is between 10 and 16, and upload to the BB website before **23:55 on April 26, 2026 (Beijing Time, UTC+8)**.
+

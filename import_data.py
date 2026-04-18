@@ -179,13 +179,15 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
             continue
         region_name = normalize_region(r["region"])
         city = clean_text(r["city"])
-        city_id = city_map[(city, region_code_map[region_name])]
+        region_code = region_code_map[region_name]
+        city_id = city_map[(city, region_code)]
         rows.append(
             (
                 int(r["id"]),
                 clean_text(r["name"]),
                 iata_code,
                 city_id,
+                region_code,
                 float(r["latitude"]),
                 float(r["longitude"]),
                 int(r["altitude"]),
@@ -200,13 +202,14 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
             cur,
             """
             INSERT INTO airport(
-                source_airport_id, airport_name, iata_code, city_id,
+                source_airport_id, airport_name, iata_code, city_id, region_code,
                 latitude, longitude, altitude, timezone_offset, timezone_dst, timezone_region
             ) VALUES %s
             ON CONFLICT (iata_code)
             DO UPDATE SET
                 airport_name = EXCLUDED.airport_name,
                 city_id = EXCLUDED.city_id,
+                region_code = EXCLUDED.region_code,
                 latitude = EXCLUDED.latitude,
                 longitude = EXCLUDED.longitude,
                 altitude = EXCLUDED.altitude,
@@ -229,12 +232,13 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
             if not iata or iata in missing_iata:
                 continue
             region_name = normalize_region(r[region_key])
+            region_code = region_code_map[region_name]
             city = r[city_key].strip()
             if not city or not region_name:
                 continue
             if iata in known_iata:
                 continue
-            city_id = city_map.get((city, region_code_map[region_name]))
+            city_id = city_map.get((city, region_code))
             if not city_id:
                 continue
             missing_iata.add(iata)
@@ -244,6 +248,7 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
                     f"{city} {iata} Airport",
                     iata,
                     city_id,
+                    region_code,
                     None,
                     None,
                     None,
@@ -259,7 +264,7 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
                 cur,
                 """
                 INSERT INTO airport(
-                    source_airport_id, airport_name, iata_code, city_id,
+                    source_airport_id, airport_name, iata_code, city_id, region_code,
                     latitude, longitude, altitude, timezone_offset, timezone_dst, timezone_region
                 ) VALUES %s
                 ON CONFLICT (iata_code) DO NOTHING
@@ -429,7 +434,7 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
     # Some flight numbers appear with multiple routes in the source data; they all
     # map to the same flight_id after deduplication, so keep only the last entry per
     # (flight_id, date) to avoid a CardinalityViolation in the batch upsert.
-    seen_ticket_keys: dict = {}
+    ticket_values_by_key = {}
     for r in ticket_rows:
         number = r["number"].strip()
         airline_id = airline_name_map.get(r["airline_name"].strip())
@@ -449,16 +454,18 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
         flight_number = signature_to_flight_number.get(flight_signature)
         if not flight_number or flight_number not in flight_id_map:
             continue
-        ticket_values.append(
-            (
-                flight_id_map[flight_number],
-                parse_date(r["date"]),
-                Decimal(r["business_price"]),
-                int(r["business_remain"]),
-                Decimal(r["economy_price"]),
-                int(r["economy_remain"]),
-            )
+        flight_id = flight_id_map[flight_number]
+        flight_date = parse_date(r["date"])
+        ticket_values_by_key[(flight_id, flight_date)] = (
+            flight_id,
+            flight_date,
+            Decimal(r["business_price"]),
+            int(r["business_remain"]),
+            Decimal(r["economy_price"]),
+            int(r["economy_remain"]),
         )
+
+    ticket_values = list(ticket_values_by_key.values())
 
     with conn.cursor() as cur:
         execute_values(

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS airport (
     airport_name TEXT NOT NULL,
     iata_code CHAR(3) NOT NULL UNIQUE,
     city_id BIGINT NOT NULL REFERENCES city(city_id),
+    region_code VARCHAR(8) NOT NULL REFERENCES region(region_code),
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     altitude INTEGER,
