@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 使用Python3 运行此脚本
 import argparse
 import csv
 import datetime as dt
@@ -7,12 +8,17 @@ from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
 
+#PostgreSQL数据库连接库
 import psycopg2
-from psycopg2.extras import execute_values
 
+#批量插入数据的工具函数
+from psycopg2.extras import execute_values
+# ====================== 路径常量配置 ======================
+# 获取当前脚本文件的绝对路径的父目录（项目根目录）
 REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "Archive"
-
+# ====================== 数据清洗constant ======================
+# 地区别名映射：统一不同CSV中对同一地区的不同命名
 REGION_ALIAS = {
     "Hong Kong SAR of China": "Hong Kong",
     "DRAGON": "Hong Kong",
@@ -20,8 +26,11 @@ REGION_ALIAS = {
     "UK": "United Kingdom",
 }
 
-
+# ====================== 核心工具函数：数据清洗 ======================
 def clean_text(value: str) -> str:
+    #清洗字符串，去除首尾空白，并将"null"（不区分大小写）视为缺失值
+    #param value: 输入字符串
+    #return: 清洗后的字符串，或空字符串表示缺失值
     value = (value or "").strip()
     if value.lower() == "null":
         return ""
@@ -29,29 +38,37 @@ def clean_text(value: str) -> str:
 
 
 def normalize_region(name: str) -> str:
+    #标准化地区名称，用别名映射统一地区名
     name = clean_text(name)
     return REGION_ALIAS.get(name, name)
 
 
 def clean_code(code: str) -> str:
+    #IATA/地区码清洗：去空格，转大写
     code = clean_text(code).upper()
     return code
 
 
 def clean_optional_text(value: str):
+    #清洗可选文本字段，返回None表示缺失值
     value = clean_text(value)
     return value or None
 
 
 def is_valid_iata_code(code: str) -> bool:
+    #校验IATA代码格式：必须是3位字符（字母或数字的组合）
     return len(clean_code(code)) == 3
 
 
 def parse_date(value: str) -> dt.date:
+    #解析日期字符串，格式为"YYYY/MM/DD"，返回datetime.date对象
     return dt.datetime.strptime(value.strip(), "%Y/%m/%d").date()
 
 
 def parse_time_with_offset(value: str):
+    #解析带跨天偏移的时间
+    #时间格式为"14:30 or 14:30(+1)"，
+    #返回一个元组：(datetime.time对象, int偏移天数)
     value = value.strip()
     m = re.fullmatch(r"(\d{1,2}:\d{2})(\(\+1\))?", value)
     if not m:
@@ -61,15 +78,22 @@ def parse_time_with_offset(value: str):
     return t, offset
 
 
+# ====================== 文件读取 ======================
 def load_csv(path: Path):
+    #读取CSV文件，返回一个字典列表，每个字典对应一行数据，键为列名
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
 
 
 def build_region_codes(region_rows, airport_rows, airline_rows, ticket_rows):
+    #构建所有地区的唯一编码：
+    #1. 优先使用region.csv中已知的地区编码
+    #2. 收集所有出现的地区名称，生成唯一编码，确保不与已知编码冲突
+    #返回一个字典：{normalized_region_name地区名称: region_code编码}
     from_region_csv = {}
-    used_codes = set()
+    used_codes = set()#记录已使用的地区编码，避免冲突
 
+    #1.从region.csv中提取已知的地区编码，并记录已使用的编码
     for row in region_rows:
         name = normalize_region(row["name"])
         code = clean_code(row["code"])
@@ -77,6 +101,7 @@ def build_region_codes(region_rows, airport_rows, airline_rows, ticket_rows):
             from_region_csv[name] = code
             used_codes.add(code)
 
+    #2.收集所有出现的地区名称
     region_names = set(from_region_csv.keys())
     for row in airport_rows:
         region_names.add(normalize_region(row["region"]))
@@ -86,16 +111,19 @@ def build_region_codes(region_rows, airport_rows, airline_rows, ticket_rows):
         region_names.add(normalize_region(row["source_region"]))
         region_names.add(normalize_region(row["destination_region"]))
 
-    region_names.discard("")
+    region_names.discard("")#去除空字符串（表示缺失值）
     code_map = dict(from_region_csv)
 
+    #为没有编码的地区生成唯一编码
     for name in sorted(region_names):
         if name in code_map:
             continue
+        #生成编码：取地区名称中的字母，大写前两位，重复则加数字后缀
         letters = "".join(ch for ch in name.upper() if ch.isalpha())
         base = (letters[:2] if len(letters) >= 2 else (letters + "X")[:2]) or "XX"
         code = base
         i = 1
+        #如果生成的编码已被使用，则在末尾添加数字后缀，直到找到一个未使用的编码
         while code in used_codes:
             suffix = str(i)
             prefix = base[: max(1, 8 - len(suffix))]
@@ -107,13 +135,17 @@ def build_region_codes(region_rows, airport_rows, airline_rows, ticket_rows):
     return code_map
 
 
+# ====================== 数据库操作 ======================
 def ensure_schema(conn, schema_path: Path):
+    #执行schemal.sql文件中的SQL语句，创建数据库表结构
     with schema_path.open("r", encoding="utf-8") as f, conn.cursor() as cur:
         cur.execute(f.read())
     conn.commit()
 
 
 def upsert_region(conn, region_code_map):
+    #插入/更新地区表数据：根据region_code_map构建要插入的行
+    #ON CONFLICT：主键冲突则更新名称，保持编码唯一
     rows = [(code, name) for name, code in region_code_map.items()]
     with conn.cursor() as cur:
         execute_values(
@@ -130,8 +162,10 @@ def upsert_region(conn, region_code_map):
 
 
 def upsert_cities(conn, airport_rows, ticket_rows, region_code_map):
+    #插入/更新city表数据：从机场和机票数据中提取城市-地区对，
+    #使用region_code_map获取地区编码
     city_keys = set()
-
+    #从airport.csv中提取城市
     for row in airport_rows:
         if not is_valid_iata_code(row["iata_code"]):
             continue
@@ -139,7 +173,7 @@ def upsert_cities(conn, airport_rows, ticket_rows, region_code_map):
         city = clean_text(row["city"])
         if city and region_name:
             city_keys.add((city, region_code_map[region_name]))
-
+    #从tickets.csv中提取departure/arrival城市
     for row in ticket_rows:
         s_city = row["source_city"].strip()
         d_city = row["destination_city"].strip()
@@ -164,14 +198,20 @@ def upsert_cities(conn, airport_rows, ticket_rows, region_code_map):
 
 
 def fetch_city_map(conn):
+    #查询city表，构建一个字典：{(city_name, region_code): city_id}，
+    #用于后续关联机场和机票数据
     with conn.cursor() as cur:
         cur.execute("SELECT city_id, city_name, region_code FROM city")
         return {(name, region): cid for cid, name, region in cur.fetchall()}
 
 
 def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
+    #插入/更新airport表数据
+    #1. 从airport.csv中提取机场数据，清洗IATA码，关联城市和地区编码
+    #2. 补充ticket.csv中出现但airport.csv中缺失的机场
     rows = []
     skipped_invalid_iata = 0
+    #处理airport.csv中的机场数据，清洗IATA码，关联城市和地区编码
     for r in airport_rows:
         iata_code = clean_code(r["iata_code"])
         if not is_valid_iata_code(iata_code):
@@ -197,6 +237,7 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
             )
         )
 
+    #批量插入机场数据，使用ON CONFLICT根据iata_code去重，更新其他字段
     with conn.cursor() as cur:
         execute_values(
             cur,
@@ -219,11 +260,12 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
             """,
             rows,
         )
-
+    #补充ticket.csv中出现但airport.csv中缺失的机场
     known_iata = {row[2] for row in rows}
     missing_rows = []
     missing_iata = set()
     for r in ticket_rows:
+        #遍历departure和arrival机场
         for city_key, region_key, iata_key in (
             ("source_city", "source_region", "source_code"),
             ("destination_city", "destination_region", "destination_code"),
@@ -277,12 +319,14 @@ def upsert_airports(conn, airport_rows, ticket_rows, city_map, region_code_map):
 
 
 def fetch_airport_iata_map(conn):
+    #获取airport表中IATA码到机场ID的映射，{IATA: airport_id}
     with conn.cursor() as cur:
         cur.execute("SELECT airport_id, iata_code FROM airport")
         return {iata: aid for aid, iata in cur.fetchall()}
 
 
 def upsert_airlines(conn, airline_rows, region_code_map):
+    #插入/更新airline表
     rows = []
     for r in airline_rows:
         region_name = normalize_region(r["region"])
@@ -312,12 +356,15 @@ def upsert_airlines(conn, airline_rows, region_code_map):
 
 
 def fetch_airline_name_id_map(conn):
+    #获取airline表中航空公司名称到ID的映射，{airline_name: airline_id}
     with conn.cursor() as cur:
         cur.execute("SELECT airline_id, airline_name FROM airline")
         return {name: aid for aid, name in cur.fetchall()}
 
 
 def upsert_passengers(conn, passenger_rows):
+    #插入/更新passenger表数据，
+    #使用ON CONFLICT根据source_passenger_id去重，更新其他字段
     rows = [
         (
             int(r["id"]),
@@ -346,19 +393,27 @@ def upsert_passengers(conn, passenger_rows):
         )
     conn.commit()
 
+# ====================== 航班+机票库存导入 ========================
 
+#CORE FUNCTION: 
 def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map):
+    #记录每个航班的最大座位数
     capacity = defaultdict(lambda: {"biz": 0, "eco": 0})
+    #根据航班特征构建唯一的航班编号，避免不同路线但同一航班号的冲突
     signature_to_flight_number = {}
+    #记录每个基础航班号的使用次数，用于生成唯一的航班编号
     flight_number_usage = defaultdict(int)
 
     def make_flight_number(base_number: str, occurrence_index: int) -> str:
+        #生成唯一的航班编号：清洗基础航班号，截断到16字符，
+        #重复的基础航班号添加后缀，如"-2"，以区分
         base_number = clean_text(base_number)
         if occurrence_index <= 0:
             return base_number[:16]
         suffix = f"-{occurrence_index + 1}"
         return f"{base_number[: max(0, 16 - len(suffix))]}{suffix}"
 
+    #遍历所有机票（ticket_rows），生成唯一航班编号，并记录最大座位数
     for r in ticket_rows:
         number = r["number"].strip()
         dep_time, _ = parse_time_with_offset(r["departure_time"])
@@ -368,6 +423,7 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
         if not airline_id:
             continue
 
+        #航班唯一标识：航班号+航空公司ID+出发机场ID+到达机场ID+出发时间+到达时间+跨天
         flight_signature = (
             number,
             airline_id,
@@ -378,15 +434,16 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
             arr_offset,
         )
 
+        #为唯一标识分配航班编号，如果同一标识已存在则复用编号，否则生成新编号
         flight_number = signature_to_flight_number.get(flight_signature)
         if flight_number is None:
             flight_number = make_flight_number(number, flight_number_usage[number])
             signature_to_flight_number[flight_signature] = flight_number
             flight_number_usage[number] += 1
-
+        #记录最大座位数
         capacity[flight_number]["biz"] = max(capacity[flight_number]["biz"], int(r["business_remain"]))
         capacity[flight_number]["eco"] = max(capacity[flight_number]["eco"], int(r["economy_remain"]))
-
+    #插入航班表
     flight_rows = [
         (
             flight_number,
@@ -426,6 +483,7 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
         )
     conn.commit()
 
+    #获取flight表中航班编号->航班ID的映射，{flight_number: flight_id}
     with conn.cursor() as cur:
         cur.execute("SELECT flight_id, flight_number FROM flight")
         flight_id_map = {num: fid for fid, num in cur.fetchall()}
@@ -434,6 +492,7 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
     # Some flight numbers appear with multiple routes in the source data; they all
     # map to the same flight_id after deduplication, so keep only the last entry per
     # (flight_id, date) to avoid a CardinalityViolation in the batch upsert.
+    #插入每日机票库存表：根据航班ID和日期去重，保留最后一条记录，避免批量更新时的冲突
     ticket_values_by_key = {}
     for r in ticket_rows:
         number = r["number"].strip()
@@ -456,6 +515,7 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
             continue
         flight_id = flight_id_map[flight_number]
         flight_date = parse_date(r["date"])
+        #按(flight_id, flight_date)去重，保留最后一条记录
         ticket_values_by_key[(flight_id, flight_date)] = (
             flight_id,
             flight_date,
@@ -486,7 +546,9 @@ def upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
     conn.commit()
 
 
+# ====================== 数据校验 ======================
 def validate_counts(conn):
+    #统计各表数据量，返回一个字典：{表名: 行数}，用于验证数据导入结果
     checks = {
         "region": "SELECT COUNT(*) FROM region",
         "city": "SELECT COUNT(*) FROM city",
@@ -504,8 +566,9 @@ def validate_counts(conn):
             out[key] = cur.fetchone()[0]
     return out
 
-
+# ====================== 主函数 ======================
 def main():
+    #命令行参数：数据库连接信息和schema.sql路径
     parser = argparse.ArgumentParser(description="Import CS307 project CSV data into PostgreSQL")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=5432)
@@ -515,6 +578,7 @@ def main():
     parser.add_argument("--schema", default=str(REPO_ROOT / "schema.sql"))
     args = parser.parse_args()
 
+    #连接PostgreSQL数据库
     conn = psycopg2.connect(
         host=args.host,
         port=args.port,
@@ -524,16 +588,20 @@ def main():
     )
 
     try:
+        # 1. 创建表结构
         ensure_schema(conn, Path(args.schema))
 
+        # 2. 加载所有CSV数据
         region_rows = load_csv(DATA_DIR / "region.csv")
         airport_rows = load_csv(DATA_DIR / "airport.csv")
         airline_rows = load_csv(DATA_DIR / "airline.csv")
         passenger_rows = load_csv(DATA_DIR / "passenger.csv")
         ticket_rows = load_csv(DATA_DIR / "tickets.csv")
 
+        # 3. 构建地区编码
         region_code_map = build_region_codes(region_rows, airport_rows, airline_rows, ticket_rows)
 
+        # 4. 按依赖顺序导入数据
         upsert_region(conn, region_code_map)
         upsert_cities(conn, airport_rows, ticket_rows, region_code_map)
         city_map = fetch_city_map(conn)
@@ -546,7 +614,8 @@ def main():
 
         upsert_passengers(conn, passenger_rows)
         upsert_flights_and_tickets(conn, ticket_rows, airport_map, airline_name_map)
-
+ 
+        # 5. 输出导入结果
         counts = validate_counts(conn)
         print("Import completed. Row counts:")
         for k, v in counts.items():

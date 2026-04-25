@@ -31,7 +31,7 @@ TO BE DONE
 
 ### E-R Diagram
 
-![alt text](<ER_diagram (1).png>)
+![alt text](<ER_diagram.png>)
 
 ### Entity and Relationship Overview
 
