@@ -42,7 +42,7 @@ class Settings:
 				value = os.getenv(env_key)
 				if fdef.type is list:
 					try:
-						value = json.loads(value)
+						value = json.loads(value) if value is not None else []
 					except Exception:
 						value = [value]
 			else:
@@ -53,8 +53,8 @@ class Settings:
 				else:
 					value = None
 
-			if fdef.type is int and value is not None:
-				value = int(value)
+			if fdef.type is int and value is not None and isinstance(value, str):
+				value = int(value)	
 			final[key] = value
 		return cls(**final)
 

@@ -8,6 +8,7 @@
   </head>
   <body>
     <div class="bg-shape"></div>
+    <div class="toast-container" id="toast-container"></div>
     <main class="page">
       <header class="hero">
         <h1>用户登录</h1>
@@ -19,6 +20,10 @@
         <form id="login-form" class="inline-fields">
           <label>手机号 <input id="username" required placeholder="mobile_number" /></label>
           <label>密码 <input id="password" type="password" required /></label>
+          <label class="checkbox-label">
+            <input id="admin-mode" type="checkbox" />
+            管理员登录 (checker)
+          </label>
           <button type="submit">登录</button>
         </form>
       </section>

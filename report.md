@@ -491,136 +491,257 @@ The same import script ran successfully on both systems without source-code chan
 
 ### Overview
 
-All CRUD operations are implemented in `cli.py`, a Python command-line program that connects to PostgreSQL via `psycopg2`. Each operation is a sub-command of the form:
+The CRUD operations are implemented as a command-line client in `cli.py`. The CLI does not access PostgreSQL directly; instead, it sends HTTP requests to the FastAPI backend under `server/app`. The backend owns database transactions, validation, and seat-count updates, while the CLI provides both a menu-style interactive interface and direct subcommands for testing.
 
-```
-python cli.py [connection options] <subcommand> [subcommand options]
+```bash
+python cli.py [--base-url http://127.0.0.1:8000] [subcommand] [subcommand options]
 ```
 
-Connection options (all optional, with defaults): `--host`, `--port`, `--user`, `--password`, `--database`.
+If no subcommand is provided, `cli.py` starts the interactive menu automatically. The CLI stores the current login state in `.cli_session.json` and sends the passenger identity to the API through the `X-Passenger-Id` request header.
+
+Before using the CLI, start the backend:
+
+```bash
+cd server
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Then start the menu:
+
+```bash
+python cli.py
+```
+
+The interactive menu displayed by the CLI contains:
+
+```text
+1) Login
+2) Search tickets
+3) Book ticket
+4) View my orders
+5) Cancel order
+6) Logout
+7) Admin function: generate tickets   # only shown after admin login
+0) Exit program
+```
+
+This menu is the main command-line interaction written for the project. It guides the user through login, ticket search, optional quick booking from search results, order listing, cancellation, logout, and administrator ticket generation.
 
 ---
 
 ### 4.1 Generate Ticket Inventory (Basic Requirement 1)
 
-**Command:**
-```
+Ticket generation is an administrator operation. The CLI first logs in with the administrator account, then calls `/api/v1/tickets/generate`.
+
+**Command-line mode:**
+
+```bash
+python cli.py login --mobile-number checker --password 114514
 python cli.py generate --start-date 2026-04-10 --end-date 2026-04-16
 ```
 
+**Interactive mode:**
+
+```text
+python cli.py
+# choose 1) Login
+# username: checker
+# password: 114514
+# choose 7) Admin function: generate tickets
+# enter start date and end date
+```
+
 **What it does:**
-1. Reads all flights from the `flight` table.
-2. For each flight and each calendar date in the given range, inserts a row into `ticket_inventory` (skips dates that already exist via `ON CONFLICT DO NOTHING`).
-3. Prices are derived from the most recent existing inventory row for the flight, with a small weekday-based multiplier.
-4. Prints the total number of new rows inserted: `Finish Generate XXXX rows tickets info.`
+
+1. `cli.py` sends a POST request to `/api/v1/tickets/generate` with `start_date` and `end_date`.
+2. `auth.require_admin` checks that the saved session is the administrator session.
+3. `TicketService.generate_inventory()` calls `TicketRepository.generate_inventory()`.
+4. The repository inserts missing `(flight_id, flight_date)` inventory rows and skips duplicates.
+5. The CLI prints the number of newly added rows.
 
 **Sample output:**
-```
-Finish Generate 1234 rows tickets info.
+
+```text
+[OK] auto generated ticket inventory, added=1234（need check）
 ```
 
-> *Attach a screenshot of this command running in your terminal.*
+![generate](generate.png)
 
 ---
 
 ### 4.2 Search Tickets (Basic Requirement 2)
 
-**Command (required fields only):**
-```
+**Command-line mode:**
+
+```bash
 python cli.py search \
   --departure-city Rome --arrival-city London --date 2026-04-10
 ```
 
-**Command (with optional filters):**
-```
+**With optional filters:**
+
+```bash
 python cli.py search \
   --departure-city Rome --arrival-city London --date 2026-04-10 \
   --airline AZ --departure-time 08:00 --arrival-time 23:00
 ```
 
+**Interactive mode:**
+
+```text
+python cli.py
+2) Search tickets
+departure city: Rome
+arrival city: London
+date: 2026-04-10
+airline: AZ
+departure time lower bound: 08:00
+arrival time upper bound: 23:00
+```
+
 **Required fields:** `--departure-city`, `--arrival-city`, `--date`  
 **Optional fields:** `--airline` (code or name), `--departure-time` (after), `--arrival-time` (before, same day)
 
-Results are sorted ascending by economy price. Each row prints:
-```
-ticket_id=<n> flight=<number> airline=<code>(<name>) <src>(<iata>)-><dst>(<iata>)
-dep=HH:MM arr=HH:MM(+<offset>) date=YYYY-MM-DD eco=<price>/<remain> biz=<price>/<remain>
+The CLI calls `/api/v1/tickets/search`. Results are printed as an aligned table:
+
+```text
++-----------+--------+----------------+----------------------+----------+----------+------------+-------------------+-------------------+
+| ticket_id | flight | airline        | route                | dep_time | arr_time | date       | eco(price/remain) | biz(price/remain) |
++-----------+--------+----------------+----------------------+----------+----------+------------+-------------------+-------------------+
 ```
 
-> *Attach a screenshot of this command running in your terminal.*
+![checkticket](checkticket.png)
 
 ---
 
 ### 4.3 Book a Ticket (Basic Requirement 3)
 
-**Step 1 — Search** (as in §4.2 above) to find a `ticket_id`.
+Booking requires a passenger login. The passenger can either pass `--passenger-id` explicitly or log in once and let the CLI read the saved passenger id from `.cli_session.json`.
 
-**Step 2 — View prices** (already shown in search output: `eco=...` and `biz=...`).
+**Command-line mode:**
 
-**Step 3 — Book:**
+```bash
+python cli.py login --mobile-number <passenger_mobile_number> --password <password>
+python cli.py book --ticket-id 100 --cabin-class economy
 ```
+
+The old explicit style is also supported:
+
+```bash
 python cli.py book --passenger-id 1 --ticket-id 100 --cabin-class economy
 ```
 
-**What it does (inside a single database transaction):**
-1. Verifies the passenger exists.
-2. Decrements the seat count (`economy_remain` or `business_remain`) with an atomic `UPDATE … RETURNING` that also confirms availability.
-3. Inserts a row into `ticket_order` with `booked_at = NOW()` (set by database default).
-4. Prints: `Booked successfully. order_id=<n>, booked_at=<timestamp>`
+**Interactive quick-book mode:**
 
-If no seats are available, it prints an error and the transaction is rolled back.
+```text
+python cli.py
+1) Login
+2) Search tickets
+whether to book directly? y
+input result number
+input cabin class: economy
+```
 
-> *Attach a screenshot of this command running in your terminal.*
+**What it does:**
+
+1. `cli.py` sends a POST request to `/api/v1/orders/book`.
+2. The backend verifies the login state from `X-Passenger-Id`.
+3. `OrderService.book_order()` checks passenger existence.
+4. `OrderRepository.decrement_seat_and_get_price()` atomically decrements `economy_remain` or `business_remain`.
+5. `OrderRepository.create_order()` inserts a row into `ticket_order`.
+6. The CLI prints `order_id` and `booked_at`.
+
+If the ticket does not exist or no seat is available, the API returns an error and the CLI prints it with the `[ERROR]` prefix.
+
+![ticketerr](ordererr.png)
 
 ---
 
 ### 4.4 List Orders (Basic Requirement 4a)
 
+**Command-line mode:**
+
+```bash
+python cli.py orders
 ```
+
+or:
+
+```bash
 python cli.py orders --passenger-id 1
 ```
 
-Lists all orders (both `booked` and `cancelled`) for the specified passenger, ordered newest-first. Each row:
-```
-order_id=<n> status=booked class=economy price=XXX.XX booked_at=... flight=AZ610 Rome->London date=2026-04-10
+**Interactive mode:**
+
+```text
+python cli.py
+4) View my orders
 ```
 
-> *Attach a screenshot of this command running in your terminal.*
+The CLI calls `/api/v1/orders/{passenger_id}` and prints both booked and cancelled orders as a table:
+
+```text
++----------+-----------+---------+--------+--------+--------------+------------+---------------------+
+| order_id | status    | class   | price  | flight | route        | date       | booked_at           |
++----------+-----------+---------+--------+--------+--------------+------------+---------------------+
+```
+
+![checkorder](checkorder.png)
 
 ---
 
 ### 4.5 Cancel an Order (Basic Requirement 4b)
 
+**Command-line mode:**
+
+```bash
+python cli.py cancel --order-id 10
 ```
+
+or:
+
+```bash
 python cli.py cancel --passenger-id 1 --order-id 10
 ```
 
-**What it does (inside a single database transaction):**
-1. Fetches the order row with `FOR UPDATE` lock, verifying it belongs to the given passenger and is not already cancelled.
-2. Sets `status = 'cancelled'`.
-3. Restores the corresponding seat count in `ticket_inventory` (increments `economy_remain` or `business_remain` by 1).
-4. Prints: `Cancelled order <n>.`
+**Interactive mode:**
+
+```text
+python cli.py
+5) Cancel order
+order_id: 10
+```
+
+Before cancellation, the CLI displays the current passenger's order table so the user can confirm the target `order_id`. Then it calls `/api/v1/orders/{passenger_id}/{order_id}/cancel`.
+
+**What it does:**
+
+1. The backend verifies that the path `passenger_id` matches the logged-in passenger.
+2. `OrderRepository.get_order_for_update()` locks the order row and checks that it is not already cancelled.
+3. `OrderRepository.mark_cancelled()` sets `status = 'cancelled'`.
+4. `OrderRepository.increment_seat()` restores the corresponding seat count in `ticket_inventory`.
+5. The CLI prints the cancelled `order_id` and final status.
 
 > *Attach a screenshot of this command running in your terminal.*
 
 ---
 
-### 4.6 Task 3.2 Queries via CLI
+### 4.6 Login and Logout
 
-The CLI also exposes the six accuracy-check queries as sub-commands for convenience during the presentation:
+The CLI includes login/logout commands because the API protects passenger order operations and administrator ticket generation.
 
 ```bash
-python cli.py cities-by-region    --region-code CN
-python cli.py airports-by-city    --city Taipei
-python cli.py airlines-by-region  --region-code TW
-python cli.py flights-by-iata     --source FCO --destination LTN
-python cli.py tickets-by-date-city --date 2026-04-10 --departure-city Rome --arrival-city London
-python cli.py tickets-by-time-window \
-  --date 2026-04-10 --departure-city Rome --arrival-city London \
-  --departure-time-after 08:00 --arrival-time-before 23:00
+python cli.py login --mobile-number <passenger_mobile_number> --password <password>
+python cli.py logout
 ```
 
-> *Attach screenshots of these commands running in your terminal.*
+For the administrator:
+
+```bash
+python cli.py login --mobile-number checker --password 114514
+```
+
+`login` calls `/api/v1/auth/login`; a successful login writes `.cli_session.json`. `logout` removes this file.
 
 ---
 
@@ -628,30 +749,79 @@ python cli.py tickets-by-time-window \
 
 | Feature | Details |
 |---------|---------|
-| Atomic booking with seat decrement | `book` uses a single transaction: `UPDATE … RETURNING` guarantees no overselling |
-| Soft cancellation with seat restoration | `cancel` marks `status='cancelled'` and restores seat count in one transaction |
-| Composite index on order lookups | `idx_order_passenger_status` on `(passenger_id, status)` makes per-passenger queries fast |
-| Idempotent `generate` | Uses `ON CONFLICT DO NOTHING` so re-running the same date range is safe |
-| Dynamic price adjustment | Ticket generation applies a small weekday factor to prices, simulating realistic demand |
+| Interactive command-line menu | Running `python cli.py` opens a numbered menu for login, search, booking, order query, cancellation, logout, and admin generation |
+| Session-based CLI workflow | `.cli_session.json` stores the logged-in passenger id, so repeated operations do not require retyping `--passenger-id` |
+| API-based program access | The CLI calls FastAPI endpoints instead of duplicating SQL logic, keeping business rules in the backend |
+| Atomic booking with seat decrement | `OrderRepository.decrement_seat_and_get_price()` updates inventory only when seats are available |
+| Soft cancellation with seat restoration | `cancel_order()` marks `status='cancelled'` and restores the corresponding cabin inventory |
+| Admin-only generation | `/api/v1/tickets/generate` requires the special administrator session |
+
+---
+
+## Code Architecture
+
+The actual project is organized as a small full-stack system plus data-import scripts:
+
+```text
+DB_project_1/
+├── schema.sql                         # PostgreSQL table definitions, constraints, and indexes
+├── import_data.py                     # Builds schema and imports CSV files from Archive/
+├── cli.py                             # Command-line client for login, ticket search, booking, orders, cancellation, and admin generation
+├── task3_accuracy_queries.sql         # Required Task 3.2 SQL queries
+├── Archive/                           # Source CSV files
+├── server/
+│   ├── app/main.py                    # FastAPI application entry point
+│   ├── app/api/v1/router.py           # Combines API routers
+│   ├── app/api/v1/auth.py             # Login and admin/passenger identity checks
+│   ├── app/api/v1/tickets.py          # Ticket inventory and search endpoints
+│   ├── app/api/v1/orders.py           # Booking, order listing, and cancellation endpoints
+│   ├── app/core/config.py             # Configuration loading
+│   ├── app/core/db.py                 # PostgreSQL connection dependency
+│   ├── app/models/schemas.py          # Pydantic request/response schemas
+│   ├── app/repository/ticket_repo.py  # SQL for ticket inventory and search
+│   ├── app/repository/order_repo.py   # SQL for booking and order cancellation
+│   ├── app/services/ticket_service.py # Ticket business logic
+│   ├── app/services/order_service.py  # Order business logic
+│   └── tests/test_api.py              # Backend API tests
+└── client/
+    ├── index.html, login.html, flights.html, inventory.html, orders.html, ticket-select.html
+    ├── js/api.js                      # Browser-side API wrapper
+    ├── js/*.js                        # Page-specific frontend behavior
+    ├── style.css                      # Shared static-page styles
+    └── src/                           # React/TypeScript component version kept with the project
+```
+
+The runtime data flow is:
+
+```mermaid
+graph TD
+  A["CLI: cli.py"] -->|"HTTP requests"| B["FastAPI server"]
+  C["Browser client: client/*.html + js"] -->|"HTTP requests"| B
+  B --> D["API layer: auth.py / tickets.py / orders.py"]
+  D --> E["Service layer: ticket_service.py / order_service.py"]
+  E --> F["Repository layer: ticket_repo.py / order_repo.py"]
+  F --> G[("PostgreSQL database")]
+```
+
+This structure separates interaction surfaces from business logic: the CLI and browser client only collect user input and display results; FastAPI performs authentication and request validation; services enforce booking/cancellation rules; repositories contain SQL and transaction-sensitive database updates.
 
 ---
 
 ## Attachments
 
-The following files are submitted alongside this report (compressed in a `.zip` archive organised by task):
+The following files are submitted alongside this report:
 
-```
-project1_submission/
-├── task1/
-│   └── er_diagram.mmd          # E-R diagram source (Mermaid)
-├── task2/
-│   └── schema.sql               # DDL (CREATE TABLE statements + indexes)
-├── task3/
-│   ├── import_data.py           # Data import script
-│   └── task3_accuracy_queries.sql  # Accuracy-check SQL for queries 1–6
-└── task4/
-    └── cli.py                   # CRUD command-line program
+```text
+DB_project_1/
+├── ER_diagram.png
+├── ER-diagram by DataGrip.png
+├── schema.sql
+├── import_data.py
+├── task3_accuracy_queries.sql
+├── cli.py
+├── server/
+├── client/
+└── Archive/
 ```
 
 > **Submission reminder:** export this document to PDF, ensure screenshots are embedded, verify page count is between 10 and 16, and upload to the BB website before **23:55 on April 26, 2026 (Beijing Time, UTC+8)**.
-

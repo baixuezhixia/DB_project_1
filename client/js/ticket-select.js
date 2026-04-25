@@ -1,12 +1,15 @@
-import { apiRequest, logout, requireLogin, setLog } from "./api.js";
+import { apiRequest, isAdmin, logout, requireLogin, setLog, showToast, showTableLoading } from "./api.js";
 
 const form = document.getElementById("filter-form");
 const tbody = document.getElementById("result-body");
 const dateTabs = document.getElementById("date-tabs");
 const currentPassengerNode = document.getElementById("current-passenger");
 const currentPassengerId = requireLogin();
+const admin = isAdmin();
 
-currentPassengerNode.textContent = String(currentPassengerId);
+currentPassengerNode.innerHTML = admin
+  ? '管理员 <span class="badge badge-business" style="margin-left:6px">Admin</span>'
+  : `旅客 #${currentPassengerId}`;
 document.getElementById("btn-logout").addEventListener("click", logout);
 
 function escapeHtml(text) {
@@ -26,21 +29,21 @@ function fillRouteFromQuery() {
   document.getElementById("arr").value = arr;
 }
 
-async function bindCityAutocomplete(inputId, listId) {
+function bindCityAutocomplete(inputId, listId) {
   const input = document.getElementById(inputId);
   const list = document.getElementById(listId);
+  let lastQuery = "";
+
   input.addEventListener("input", async () => {
     const keyword = input.value.trim();
-    if (keyword.length < 1) {
-      list.innerHTML = "";
-      return;
-    }
+    if (keyword.length < 1) { list.innerHTML = ""; return; }
+    if (keyword === lastQuery) return;
+    lastQuery = keyword;
     try {
       const cities = await apiRequest(`/api/v1/tickets/cities?keyword=${encodeURIComponent(keyword)}&limit=12`);
+      if (keyword !== input.value.trim()) return;
       list.innerHTML = cities.map((c) => `<option value="${c}"></option>`).join("");
-    } catch (_) {
-      list.innerHTML = "";
-    }
+    } catch (_) { list.innerHTML = ""; }
   });
 }
 
@@ -74,7 +77,24 @@ function buildDateTabs() {
   }
 }
 
+// Admin cannot book — show a disabled placeholder instead
+function renderBookingCell(r) {
+  if (admin) {
+    return '<span class="text-muted" style="font-size:12px">仅乘客可订</span>';
+  }
+  return `
+    <button class="mini-btn" data-id="${r.ticket_id}" data-cabin="economy">经济舱</button>
+    <button class="mini-btn" data-id="${r.ticket_id}" data-cabin="business">商务舱</button>
+  `;
+}
+
 async function bookTicket(ticketId, cabinClass) {
+  // Admin cannot book (server will reject anyway)
+  if (admin) {
+    showToast("管理员无法下单", "error");
+    return;
+  }
+
   try {
     const data = await apiRequest("/api/v1/orders/book", {
       method: "POST",
@@ -85,47 +105,48 @@ async function bookTicket(ticketId, cabinClass) {
       },
     });
     setLog(`下单成功: order_id=${data.order_id}, ticket_id=${ticketId}, cabin=${cabinClass}`);
+    showToast(`下单成功! 订单 #${data.order_id}`, "success");
     await searchAndRenderTickets();
   } catch (err) {
     setLog(`下单失败: ${err.message}`);
+    showToast(`下单失败: ${err.message}`, "error");
   }
 }
 
 function renderRows(rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:gray;">没有符合条件的机票</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--ink-muted)">没有符合条件的机票</td></tr>';
     return;
   }
 
-  const sortedRows = [...rows].sort((a, b) => String(a.departure_time_local).localeCompare(String(b.departure_time_local)));
+  const sortedRows = [...rows].sort((a, b) =>
+    String(a.departure_time_local).localeCompare(String(b.departure_time_local))
+  );
 
   tbody.innerHTML = sortedRows
     .map(
       (r) => `
       <tr>
-        <td>${r.ticket_id}</td>
-        <td>${escapeHtml(r.flight_number)}</td>
-        <td>${escapeHtml(r.airline_code)} (${escapeHtml(r.airline_name)})</td>
-        <td>${escapeHtml(r.source_city)}(${escapeHtml(r.source_iata)}) -> ${escapeHtml(r.destination_city)}(${escapeHtml(r.destination_iata)})</td>
-        <td>${escapeHtml(r.departure_time_local)} - ${escapeHtml(r.arrival_time_local)} (+${r.arrival_day_offset})</td>
-        <td>${r.economy_remain} / ${r.economy_price}</td>
-        <td>${r.business_remain} / ${r.business_price}</td>
-        <td>
-          <button class="mini-btn" data-id="${r.ticket_id}" data-cabin="economy">经济舱</button>
-          <button class="mini-btn" data-id="${r.ticket_id}" data-cabin="business">商务舱</button>
-        </td>
+        <td><code>${r.ticket_id}</code></td>
+        <td><strong>${escapeHtml(r.flight_number)}</strong></td>
+        <td>${escapeHtml(r.airline_code)}</td>
+        <td>${escapeHtml(r.source_city)} → ${escapeHtml(r.destination_city)}</td>
+        <td>${escapeHtml(r.departure_time_local)} - ${escapeHtml(r.arrival_time_local)}</td>
+        <td><span class="badge badge-economy">￥${r.economy_price}</span> 余${r.economy_remain}</td>
+        <td><span class="badge badge-business">￥${r.business_price}</span> 余${r.business_remain}</td>
+        <td>${renderBookingCell(r)}</td>
       </tr>
     `,
     )
     .join("");
 
-  tbody.querySelectorAll("button[data-id]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const ticketId = Number(btn.dataset.id);
-      const cabin = btn.dataset.cabin;
-      bookTicket(ticketId, cabin);
+  if (!admin) {
+    tbody.querySelectorAll("button[data-id]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        bookTicket(Number(btn.dataset.id), btn.dataset.cabin);
+      });
     });
-  });
+  }
 }
 
 async function searchAndRenderTickets() {
@@ -137,6 +158,13 @@ async function searchAndRenderTickets() {
   const airline = document.getElementById("airline").value.trim();
   const srcIata = document.getElementById("src-iata").value.trim();
   const dstIata = document.getElementById("dst-iata").value.trim();
+
+  if (!dep || !arr || !date) {
+    showToast("请填写出发城市、到达城市和日期", "error");
+    return;
+  }
+
+  showTableLoading(tbody);
 
   const params = new URLSearchParams({
     departure_city: dep,
@@ -157,7 +185,9 @@ async function searchAndRenderTickets() {
     renderRows(rows);
     setLog(`筛选完成，返回 ${rows.length} 条机票`);
   } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--ink-muted)">查询失败</td></tr>';
     setLog(`筛选失败: ${err.message}`);
+    showToast("筛选失败", "error");
   }
 }
 
@@ -170,3 +200,7 @@ fillRouteFromQuery();
 bindCityAutocomplete("dep", "dep-city-list");
 bindCityAutocomplete("arr", "arr-city-list");
 buildDateTabs();
+
+const dep = document.getElementById("dep").value.trim();
+const arr = document.getElementById("arr").value.trim();
+if (dep && arr) searchAndRenderTickets();

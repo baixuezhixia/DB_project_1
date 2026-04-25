@@ -35,9 +35,11 @@ class OrderRepository(BaseRepository):
 	def create_order(self, passenger_id: int, ticket_id: int, cabin_class: str, unit_price: float):
 		row = self.fetch_one(
 			"""
-			INSERT INTO ticket_order(passenger_id, ticket_id, cabin_class, unit_price)
+			INSERT INTO ticket_order
+			(passenger_id, ticket_id, cabin_class, unit_price)
 			VALUES (%s, %s, %s, %s)
-			RETURNING order_id, passenger_id, ticket_id, cabin_class, unit_price, status, booked_at
+			RETURNING order_id, passenger_id, ticket_id, 
+			cabin_class, unit_price, status, booked_at
 			""",
 			(passenger_id, ticket_id, cabin_class, unit_price),
 		)
@@ -55,13 +57,8 @@ class OrderRepository(BaseRepository):
 		rows = self.fetch_all(
 			"""
 			SELECT
-				o.order_id,
-				o.status,
-				o.cabin_class,
-				o.unit_price,
-				o.booked_at,
-				ti.flight_date,
-				f.flight_number,
+				o.order_id,o.status,o.cabin_class,o.unit_price,
+				o.booked_at,ti.flight_date,f.flight_number,
 				src_city.city_name,
 				dst_city.city_name
 			FROM ticket_order o
@@ -112,18 +109,24 @@ class OrderRepository(BaseRepository):
 
 	def mark_cancelled(self, order_id: int):
 		self.execute(
-			"UPDATE ticket_order SET status = 'cancelled' WHERE order_id = %s",
+			"UPDATE ticket_order " \
+			"SET status = 'cancelled' " \
+			"WHERE order_id = %s",
 			(order_id,),
 		)
 
 	def increment_seat(self, ticket_id: int, cabin_class: str):
 		if cabin_class == "economy":
 			self.execute(
-				"UPDATE ticket_inventory SET economy_remain = economy_remain + 1 WHERE ticket_id = %s",
+				"UPDATE ticket_inventory " \
+				"SET economy_remain = economy_remain + 1 " \
+				"WHERE ticket_id = %s",
 				(ticket_id,),
 			)
 		else:
 			self.execute(
-				"UPDATE ticket_inventory SET business_remain = business_remain + 1 WHERE ticket_id = %s",
+				"UPDATE ticket_inventory " \
+				"SET business_remain = business_remain + 1 " \
+				"WHERE ticket_id = %s",
 				(ticket_id,),
 			)
