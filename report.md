@@ -743,6 +743,9 @@ python cli.py login --mobile-number checker --password 114514
 
 `login` calls `/api/v1/auth/login`; a successful login writes `.cli_session.json`. `logout` removes this file.
 
+> *Attach a screenshot of successful passenger login and another screenshot of administrator login/logout in the terminal.*
+> *If possible, also attach a screenshot showing that, after login, the menu displays the current passenger id or the admin identity.*
+
 ---
 
 ### 4.7 Advanced Features Implemented
@@ -755,6 +758,68 @@ python cli.py login --mobile-number checker --password 114514
 | Atomic booking with seat decrement | `OrderRepository.decrement_seat_and_get_price()` updates inventory only when seats are available |
 | Soft cancellation with seat restoration | `cancel_order()` marks `status='cancelled'` and restores the corresponding cabin inventory |
 | Admin-only generation | `/api/v1/tickets/generate` requires the special administrator session |
+
+---
+
+### 4.8 Bonus Requirements Completed
+
+According to the bonus requirements in Task 4, the current project implements three major bonus directions: generation efficiency improvement, permission management, and a graphical user interface. The contact feature was not implemented in this version.
+
+#### 4.8.1 Efficiency Optimization for Ticket Generation
+
+The ticket generation logic is not implemented with a Python loop that inserts rows one by one. Instead, it is pushed down to PostgreSQL in a set-based SQL statement inside `TicketRepository.generate_inventory()`.
+
+Key optimization ideas:
+
+1. Use `generate_series(start_date, end_date, interval '1 day')` to create all target dates in one step.
+2. Use `CROSS JOIN` between `flight` and the generated date series to build all candidate `(flight_id, flight_date)` pairs.
+3. Use a `latest_ticket` CTE to reuse the latest known price of each flight as the pricing base.
+4. Use a `candidates` CTE to `LEFT JOIN` existing `ticket_inventory` rows and keep only rows whose `(flight_id, flight_date)` does not already exist.
+5. Insert all remaining candidate rows in a single `INSERT ... SELECT` statement instead of repeated single-row inserts.
+6. Keep `ON CONFLICT (flight_id, flight_date) DO NOTHING` as a concurrency-safe fallback, so repeated generation is still idempotent.
+
+This design reduces the number of Python-to-database round trips and lets PostgreSQL optimize the bulk operation internally. The extra `candidates` filtering step also avoids attempting to insert rows that are already present, which reduces unnecessary unique-index conflict checks when the same date range is generated more than once.
+
+> *Attach a screenshot of the `generate` command in the terminal and, if space permits, a screenshot of the corresponding SQL implementation in `server/app/repository/ticket_repo.py`.*
+
+#### 4.8.2 Permission Management
+
+The project implements login and authorization for order-related operations.
+
+The permission design is as follows:
+
+1. A user must first log in through `/api/v1/auth/login`.
+2. After login, the CLI stores the current identity in `.cli_session.json`, and the browser frontend stores it in `localStorage`.
+3. Subsequent requests carry the current identity through the `X-Passenger-Id` header.
+4. `orders.py` checks the header and verifies that the requested `passenger_id` matches the logged-in user.
+5. Therefore, a passenger can only view and cancel his or her own orders.
+6. Ticket generation is further restricted to a special administrator identity (`checker` / `114514`).
+
+This bonus item corresponds directly to the requirement that "each user can only view his or her own orders." In other words, authorization is enforced both in the CLI workflow and in the backend API layer.
+
+
+#### 4.8.3 Graphical User Interface (GUI)
+
+In addition to the command-line interaction required by the assignment, the project also includes a browser-based frontend under the `client/` directory. The GUI is implemented with static HTML, CSS, and JavaScript pages, and communicates with the same FastAPI backend.
+
+The implemented pages include:
+
+- `login.html`: login page for passenger/admin login
+- `index.html`: dashboard page
+- `flights.html`: flight query entry page
+- `ticket-select.html`: ticket filtering and booking page
+- `inventory.html`: inventory management page
+- `orders.html`: order query and cancellation page
+
+The GUI is not only functional, but also intentionally styled with a more polished visual design, including a dashboard layout, navigation bar, cards, panels, system log area, buttons, and feedback messages. This satisfies the "visual user interface" bonus requirement for Task 4.
+
+![webpage](webpage.png)
+
+#### 4.8.4 Contact Feature Status
+
+The contact-management bonus item was **not implemented** in this project. The current order flow only supports booking tickets for the logged-in passenger. Therefore, the database schema was not extended with a separate contact table, and the booking logic does not yet support placing an order for another linked contact.
+
+Stating this explicitly helps keep the report accurate and avoids overstating the completed scope.
 
 ---
 
@@ -804,6 +869,18 @@ graph TD
 ```
 
 This structure separates interaction surfaces from business logic: the CLI and browser client only collect user input and display results; FastAPI performs authentication and request validation; services enforce booking/cancellation rules; repositories contain SQL and transaction-sensitive database updates.
+
+From an architectural point of view, this is close to a layered MVC-style design:
+
+- View layer: CLI prompts and browser pages in `client/`
+- Controller/API layer: `auth.py`, `tickets.py`, and `orders.py`
+- Service layer: `ticket_service.py` and `order_service.py`
+- Data access layer: `ticket_repo.py` and `order_repo.py`
+- Model/schema layer: `schemas.py` plus the PostgreSQL table design
+
+This layered organization is also one of the bonus points requested in Task 4, because the program can be started once and then complete all operations through a relatively clear internal architecture.
+
+> *Attach one screenshot of the project directory tree or IDE structure view, and one screenshot of the backend/frontend running together if space allows.*
 
 ---
 

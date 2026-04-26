@@ -186,6 +186,22 @@ class TicketRepository(BaseRepository):
 			date_series AS (
 				SELECT generate_series(%s::date, %s::date, interval '1 day')::date AS flight_date
 			),
+			candidates AS (
+				SELECT
+					f.flight_id,
+					ds.flight_date,
+					f.business_capacity,
+					f.economy_capacity,
+					lt.business_price,
+					lt.economy_price
+				FROM flight f
+				CROSS JOIN date_series ds
+				LEFT JOIN latest_ticket lt ON lt.flight_id = f.flight_id
+				LEFT JOIN ticket_inventory existing
+					ON existing.flight_id = f.flight_id
+				   AND existing.flight_date = ds.flight_date
+				WHERE existing.ticket_id IS NULL
+			),
 			inserted AS (
 				INSERT INTO ticket_inventory(
 					flight_id,
@@ -196,25 +212,23 @@ class TicketRepository(BaseRepository):
 					economy_remain
 				)
 				SELECT
-					f.flight_id,
-					ds.flight_date,
+					c.flight_id,
+					c.flight_date,
 					ROUND(
-						(COALESCE(lt.business_price, 1000::numeric) * (
-							1 + ((EXTRACT(DOW FROM ds.flight_date)::int %% 3) * 0.05)
+						(COALESCE(c.business_price, 1000::numeric) * (
+							1 + ((EXTRACT(DOW FROM c.flight_date)::int %% 3) * 0.05)
 						))::numeric,
 						2
 					),
-					f.business_capacity,
+					c.business_capacity,
 					ROUND(
-						(COALESCE(lt.economy_price, 300::numeric) * (
-							1 + ((EXTRACT(DOW FROM ds.flight_date)::int %% 3) * 0.05)
+						(COALESCE(c.economy_price, 300::numeric) * (
+							1 + ((EXTRACT(DOW FROM c.flight_date)::int %% 3) * 0.05)
 						))::numeric,
 						2
 					),
-					f.economy_capacity
-				FROM flight f
-				CROSS JOIN date_series ds
-				LEFT JOIN latest_ticket lt ON lt.flight_id = f.flight_id
+					c.economy_capacity
+				FROM candidates c
 				ON CONFLICT (flight_id, flight_date) DO NOTHING
 				RETURNING 1
 			)
