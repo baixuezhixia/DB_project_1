@@ -241,44 +241,73 @@ The same import script ran successfully on both systems without source-code chan
 
 ### Overview
 
-The CRUD operations are implemented as a command-line client in `cli.py`. The CLI does not access PostgreSQL directly; instead, it sends HTTP requests to the FastAPI backend under `server/app`. The backend owns database transactions, validation, and seat-count updates, while the CLI provides both a menu-style interactive interface and direct subcommands for testing.
-
-```bash
-python cli.py [--base-url http://127.0.0.1:8000] [subcommand] [subcommand options]
-```
-
-If no subcommand is provided, `cli.py` starts the interactive menu automatically. The CLI stores the current login state in `.cli_session.json` and sends the passenger identity to the API through the `X-Passenger-Id` request header.
-
-Before using the CLI, start the backend:
+The CRUD operations are implemented in `cli.py`. The client talks to the FastAPI backend under `server/app`, while the backend handles validation, authorization, database transactions, and seat-count updates.
 
 ```bash
 cd server
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python ../cli.py
 ```
 
-Then start the menu:
-
-```bash
-python cli.py
-```
-
-The interactive menu displayed by the CLI contains:
-
-```text
-1) Login
-2) Search tickets
-3) Book ticket
-4) View my orders
-5) Cancel order
-6) Logout
-7) Admin function: generate tickets   # only shown after admin login
-0) Exit program
-```
-
-This menu is the main command-line interaction written for the project. It guides the user through login, ticket search, optional quick booking from search results, order listing, cancellation, logout, and administrator ticket generation.
+If no subcommand is provided, the CLI starts an interactive menu for login, ticket search, booking, order query, cancellation, logout, and administrator ticket generation. The current login state is stored in `.cli_session.json` and sent through the `X-Passenger-Id` request header.
 
 ---
 
+### 4.1 Basic CRUD Requirements
+
+The CLI supports both direct subcommands and the interactive menu. The main commands used to verify the required operations are:
+
+```bash
+python cli.py login --mobile-number checker --password 114514
+python cli.py generate --start-date 2026-04-10 --end-date 2026-04-16
+python cli.py search --departure-city Rome --arrival-city London --date 2026-04-10
+python cli.py book --ticket-id 100 --cabin-class economy
+python cli.py orders
+python cli.py cancel --order-id 10
+```
+
+| Requirement | Endpoint and backend behavior |
+|-------------|-------------------------------|
+| Generate ticket inventory | Admin-only call to `POST /api/v1/tickets/generate`; missing `(flight_id, flight_date)` rows are inserted and duplicates are skipped. |
+| Search tickets | Call to `/api/v1/tickets/search` with required city/date filters and optional airline/departure/arrival-time filters; results are printed as a table. |
+| Book a ticket | Passenger-only call to `POST /api/v1/orders/book`; the backend checks login, atomically decrements the selected cabin inventory, and inserts a `ticket_order` row. |
+| List orders | Call to `/api/v1/orders/{passenger_id}`; both booked and cancelled orders are shown with flight, route, cabin, price, date, and status. |
+| Cancel an order | Call to `/api/v1/orders/{passenger_id}/{order_id}/cancel`; the order is locked, marked as `cancelled`, and the corresponding seat count is restored. |
+
+<p align="center">
+  <img src="generate.png" alt="Generate ticket inventory" style="width:48%; max-width:48%; vertical-align:top;">
+  <img src="checkticket.png" alt="Ticket search" style="width:48%; max-width:48%; vertical-align:top;">
+</p>
+<p align="center">
+  <img src="ordererr.png" alt="Booking and error handling" style="width:48%; max-width:48%; vertical-align:top;">
+  <img src="checkorder.png" alt="Order list" style="width:48%; max-width:48%; vertical-align:top;">
+</p>
+
+### 4.2 Login, Logout, and Authorization
+
+`login` calls `/api/v1/auth/login`; a successful login writes `.cli_session.json`, and `logout` removes it. For protected order APIs, `orders.py` checks that the requested passenger id matches the logged-in id in `X-Passenger-Id`. Ticket generation is further restricted to the administrator account `checker` / `114514`.
+
+### 4.3 Advanced and Bonus Features
+
+| Feature | Implementation |
+|---------|----------------|
+| Interactive CLI | Running `python cli.py` opens a menu for login, search, booking, order query, cancellation, logout, and admin generation. |
+| Session workflow | `.cli_session.json` keeps the logged-in identity so repeated operations do not require retyping `--passenger-id`. |
+| Atomic booking | `OrderRepository.decrement_seat_and_get_price()` updates inventory only when seats are available, then creates the order. |
+| Soft cancellation | Cancellation changes `status` to `cancelled` and restores the selected cabin inventory. |
+| Efficient generation | Ticket generation uses PostgreSQL set-based SQL: `generate_series`, `CROSS JOIN`, CTE filtering, `INSERT ... SELECT`, and `ON CONFLICT DO NOTHING`. |
+| Permission management | Passengers can view/cancel only their own orders, and ticket generation requires administrator identity. |
+| GUI bonus | The `client/` frontend provides login, dashboard, flight query, ticket selection, inventory, and order-management pages using the same backend APIs. |
+
+<p align="center">
+  <img src="webpage.png" alt="Web GUI" style="width:75%; max-width:75%;">
+</p>
+
+The contact-management bonus item was **not implemented**. The current booking flow only supports creating orders for the logged-in passenger, so no separate contact table was added.
+
+---
+
+<!--
 ### 4.1 Generate Ticket Inventory (Basic Requirement 1)
 
 Ticket generation is an administrator operation. The CLI first logs in with the administrator account, then calls `/api/v1/tickets/generate`.
@@ -572,6 +601,8 @@ The contact-management bonus item was **not implemented** in this project. The c
 Stating this explicitly helps keep the report accurate and avoids overstating the completed scope.
 
 ---
+-->
+
 ## Attachments
 
 The following files are submitted alongside this report:
