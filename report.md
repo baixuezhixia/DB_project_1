@@ -26,9 +26,7 @@
 ## Task 1: E-R Diagram (20 %)
 
 ### Diagramming tool
-
-TO BE DONE
-
+draw.io
 ### E-R Diagram
 
 ![alt text](<ER_diagram.png>)
@@ -56,175 +54,36 @@ Key relationships:
 - PASSENGER **places** many TICKET_ORDERs; each TICKET_ORDER references one TICKET_INVENTORY.
 
 ---
-
 ## Task 2: Database Design (20 %)
 
 ### DataGrip E-R Diagram
 ![alt text](<ER-diagram by DataGrip.png>)
 
+### Brief Design Description
+This database is designed for flight search, ticket inventory management, booking, and cancellation workflows.  
+Reference entities include Region, City, Airport, Airline, and Passenger.  
+Operational entities include Flight, Ticket Inventory, and Ticket Order.  
+The complete DDL definitions are submitted separately in schema.sql.
 
-### Table Design
+### Table and Column Meanings
 
-#### 2.1 `region`
+| Table | Meaning of the table | Main columns and meanings |
+|---|---|---|
+| region | Stores geographic regions used by cities and airlines | region_code: region identifier (primary key); region_name: full region name |
+| city | Stores cities, each linked to one region | city_id: (primary key); city_name: city name; region_code: foreign key to region |
+| airport | Stores airport master data | airport_id: (primary key); source_airport_id: source CSV id; airport_name: airport full name; iata_code: unique airport code; city_id: foreign key to city; latitude/longitude/altitude/timezone fields: location and timezone attributes |
+| airline | Stores airline master data | airline_id: (primary key); source_airline_id: source CSV id; airline_code: unique airline code; airline_name: airline full name; region_code: foreign key to region |
+| passenger | Stores passenger profile data | passenger_id: (primary key); source_passenger_id: source CSV id; passenger_name: full name; age/gender/mobile_number: personal attributes, mobile_number used as unique contact key |
+| flight | Stores recurring flight routes and schedule templates | flight_id: (primary key); flight_number: unique flight number; airline_id: foreign key to airline; source_airport_id/destination_airport_id: route endpoints; departure_time_local/arrival_time_local: scheduled times; arrival_day_offset: same-day or next-day arrival; business_capacity/economy_capacity: seat capacities |
+| ticket_inventory | Stores date-specific inventory and price for each flight | ticket_id: (primary key); flight_id: foreign key to flight; flight_date: operation date; business_price/economy_price: cabin prices; business_remain/economy_remain: remaining seats |
+| ticket_order | Stores booking and cancellation records | order_id: (primary key); passenger_id: foreign key to passenger; ticket_id: foreign key to ticket_inventory; cabin_class: booked cabin; unit_price: transaction price; booked_at: booking time; status: booked or cancelled |
 
-Stores geographic regions sourced from `region.csv`, extended with extra entries derived from `airport.csv`, `airline.csv`, and `tickets.csv`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `region_code` | `VARCHAR(8)` | PRIMARY KEY | Short identifier (e.g., `CN`, `US`, `TW`). Used as the canonical key across tables. |
-| `region_name` | `TEXT` | NOT NULL, UNIQUE | Full human-readable name. |
-
-**Design notes:** `region_code` is the natural key already present in the source data. Aliasing logic in `import_data.py` unifies synonyms such as `"Hong Kong SAR of China"` and `"DRAGON"` to `"Hong Kong"`, and `"UK"` to `"United Kingdom"`.
-
----
-
-#### 2.2 `city`
-
-Cities extracted from `airport.csv` and `tickets.csv`. A city is uniquely identified by its name within a region (composite unique constraint).
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `city_id` | `BIGSERIAL` | PRIMARY KEY | Auto-generated surrogate key. |
-| `city_name` | `TEXT` | NOT NULL | Name of the city. |
-| `region_code` | `VARCHAR(8)` | NOT NULL, FK → `region` | Region the city belongs to. |
-
-UNIQUE(`city_name`, `region_code`) — handles cities with the same name in different regions.
-
----
-
-#### 2.3 `airport`
-
-Airport data from `airport.csv`, plus synthetic entries for any IATA codes that appear in `tickets.csv` but not in `airport.csv`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `airport_id` | `BIGSERIAL` | PRIMARY KEY | Surrogate key. |
-| `source_airport_id` | `BIGINT` | UNIQUE | Original ID from the source CSV (nullable for synthetic rows). |
-| `airport_name` | `TEXT` | NOT NULL | Full airport name. |
-| `iata_code` | `CHAR(3)` | NOT NULL, UNIQUE | IATA 3-letter code; used as the natural identifier in queries. |
-| `city_id` | `BIGINT` | NOT NULL, FK → `city` | City this airport belongs to. |
-| `latitude` | `DOUBLE PRECISION` | — | Geographic latitude. |
-| `longitude` | `DOUBLE PRECISION` | — | Geographic longitude. |
-| `altitude` | `INTEGER` | — | Elevation in feet. |
-| `timezone_offset` | `INTEGER` | — | UTC offset in hours. |
-| `timezone_dst` | `VARCHAR(8)` | — | DST rule identifier. |
-| `timezone_region` | `TEXT` | — | IANA timezone name. |
-
-An index on `iata_code` supports fast lookups in join-heavy queries.
-
----
-
-#### 2.4 `airline`
-
-Airline data from `airline.csv`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `airline_id` | `BIGSERIAL` | PRIMARY KEY | Surrogate key. |
-| `source_airline_id` | `BIGINT` | UNIQUE | Original CSV ID. |
-| `airline_code` | `VARCHAR(8)` | NOT NULL, UNIQUE | IATA or ICAO airline designator. |
-| `airline_name` | `TEXT` | NOT NULL | Full airline name. |
-| `region_code` | `VARCHAR(8)` | NOT NULL, FK → `region` | Region where the airline is registered. |
-
----
-
-#### 2.5 `passenger`
-
-Passenger data from `passenger.csv`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `passenger_id` | `BIGSERIAL` | PRIMARY KEY | Surrogate key. |
-| `source_passenger_id` | `BIGINT` | UNIQUE | Original CSV ID. |
-| `passenger_name` | `TEXT` | NOT NULL | Full name. |
-| `age` | `INTEGER` | CHECK (age >= 0) | Age in years. |
-| `gender` | `VARCHAR(16)` | — | Gender string. |
-| `mobile_number` | `VARCHAR(32)` | UNIQUE | Contact number; also serves as a natural key. |
-
----
-
-#### 2.6 `flight`
-
-Represents a recurring flight route (same schedule every day it operates). Split out from `tickets.csv`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `flight_id` | `BIGSERIAL` | PRIMARY KEY | Surrogate key. |
-| `flight_number` | `VARCHAR(16)` | NOT NULL, UNIQUE | Carrier + number (e.g., `AZ610`). |
-| `airline_id` | `BIGINT` | NOT NULL, FK → `airline` | Operating airline. |
-| `source_airport_id` | `BIGINT` | NOT NULL, FK → `airport` | Departure airport. |
-| `destination_airport_id` | `BIGINT` | NOT NULL, FK → `airport` | Arrival airport. |
-| `departure_time_local` | `TIME` | NOT NULL | Scheduled departure (local time). |
-| `arrival_time_local` | `TIME` | NOT NULL | Scheduled arrival (local time). |
-| `arrival_day_offset` | `SMALLINT` | NOT NULL, DEFAULT 0 | `0` = same day, `1` = next day. |
-| `business_capacity` | `INTEGER` | NOT NULL, CHECK ≥ 0 | Total business seats on this flight. |
-| `economy_capacity` | `INTEGER` | NOT NULL, CHECK ≥ 0 | Total economy seats on this flight. |
-
-A CHECK constraint ensures `source_airport_id <> destination_airport_id`.
-
-**Design note for "arrive before 11:00" queries:** storing `arrival_day_offset` as a separate integer column keeps the schema in 1NF (no encoded composite value in the time field) while enabling efficient filter:
-
-```sql
-SELECT * FROM flight
-WHERE arrival_day_offset = 0
-  AND arrival_time_local < '11:00:00';
-```
-
-A composite index `(arrival_time_local, arrival_day_offset)` makes this query fast even on large tables.
-
----
-
-#### 2.7 `ticket_inventory`
-
-One row per (flight, date) pair. Split from the original flat `tickets.csv`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `ticket_id` | `BIGSERIAL` | PRIMARY KEY | Surrogate key. |
-| `flight_id` | `BIGINT` | NOT NULL, FK → `flight` | The flight this inventory belongs to. |
-| `flight_date` | `DATE` | NOT NULL | The calendar date of the flight. |
-| `business_price` | `NUMERIC(10,2)` | NOT NULL, CHECK ≥ 0 | Business class price. |
-| `business_remain` | `INTEGER` | NOT NULL, CHECK ≥ 0 | Remaining business seats. |
-| `economy_price` | `NUMERIC(10,2)` | NOT NULL, CHECK ≥ 0 | Economy class price. |
-| `economy_remain` | `INTEGER` | NOT NULL, CHECK ≥ 0 | Remaining economy seats. |
-
-UNIQUE(`flight_id`, `flight_date`) prevents duplicate inventory rows.
-
----
-
-#### 2.8 `ticket_order`
-
-Records every booking or cancellation made by a passenger.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `order_id` | `BIGSERIAL` | PRIMARY KEY | Surrogate key. |
-| `passenger_id` | `BIGINT` | NOT NULL, FK → `passenger` | The passenger who booked. |
-| `ticket_id` | `BIGINT` | NOT NULL, FK → `ticket_inventory` | The ticket (flight+date) booked. |
-| `cabin_class` | `VARCHAR(16)` | NOT NULL, CHECK IN ('economy','business') | Chosen cabin. |
-| `unit_price` | `NUMERIC(10,2)` | NOT NULL, CHECK ≥ 0 | Price locked in at booking time. |
-| `booked_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT NOW() | Booking timestamp (auto-set). |
-| `status` | `VARCHAR(16)` | NOT NULL, DEFAULT 'booked', CHECK IN ('booked','cancelled') | Current order state. |
-
-### Normal Form Analysis
-
-- **1NF:** Every column stores a single atomic value. `arrival_day_offset` stores the day rollover as a plain integer rather than encoding it inside the time string.  
-- **2NF:** All non-key attributes depend on the entire primary key. Tables with composite unique keys (e.g., `city`) use a surrogate PK to simplify FK references.  
-- **3NF:** No transitive dependencies. For example, airport location data (latitude, longitude, etc.) lives in `airport`, not in `flight` or `ticket_inventory`.
-
-### Indexes
-
-| Index | Columns | Purpose |
-|-------|---------|---------|
-| `idx_airport_iata_code` | `airport(iata_code)` | Fast IATA lookups |
-| `idx_city_name` | `city(city_name)` | City-name filter in ticket search |
-| `idx_airline_code` | `airline(airline_code)` | Airline code/name filter |
-| `idx_ticket_flight_date` | `ticket_inventory(flight_date)` | Date-based ticket queries |
-| `idx_ticket_arrival_lookup` | `flight(arrival_time_local, arrival_day_offset)` | Efficient "arrive before X" filter |
-| `idx_order_passenger_status` | `ticket_order(passenger_id, status)` | Per-passenger order lookups |
-
-> **Attachment:** `schema.sql` contains all `CREATE TABLE` DDL statements.
-
+### Design Notes
+1. The model separates recurring schedule data (flight) from date-specific inventory data (ticket_inventory), reducing redundancy.
+2. City uniqueness is handled by city_name plus region_code, which avoids ambiguity for same-name cities in different regions.
+3. arrival_day_offset is stored as an atomic integer field to represent next-day arrivals and support accurate time filtering.
+4. Foreign keys enforce referential integrity across all major relationships.
+5. Full constraints and indexes are defined in schema.sql (submitted as a separate file).
 ---
 
 ## Task 3: Data Import (30 %)
@@ -280,63 +139,37 @@ The script processes tables in dependency order to satisfy all foreign-key const
 5. **Airlines** (`upsert_airlines`) — From `airline.csv`, matched to region codes.  
 6. **Passengers** (`upsert_passengers`) — From `passenger.csv`.  
 7. **Flights & ticket inventory** (`upsert_flights_and_tickets`) — Flight rows are deduplicated by flight number; `arrival_day_offset` is parsed from the `(+1)` suffix in arrival time strings. Ticket inventory rows are deduplicated on `(flight_id, flight_date)`.
-
-#### Dirty data handling
-
-- Arrival times encoded as `HH:MM(+1)` are split into a time value and an integer offset field, satisfying 1NF.  
-- Duplicate region names with different encodings are unified via the `REGION_ALIAS` dictionary.  
-- Airport IATA codes with length ≠ 3 are discarded.  
-- Seats remaining are taken as the maximum value observed across all ticket rows for a given flight, ensuring capacity is not under-estimated.
-
 ---
 
 ### Task 3.2 — Data Accuracy Checking (15 %)
 
-The queries are stored in `task3_accuracy_queries.sql` and can be run directly in DataGrip by substituting the named parameters.
-
-#### Query 1 — Given a region code, list all cities
-**Example:** `:region_code = 'CN'`
+#### Query 1 —**Example:** `:region_code = 'CN'`
 
 ---
 
-#### Query 2 — Given a city name, list all airports and IATA codes
-**Example:** `:city_name = 'Taipei'`
+#### Query 2 —**Example:** `:city_name = 'Taipei'`
 
 ---
 
-#### Query 3 — Given a region code, list all airlines (code + name)
-**Example:** `:region_code = 'TW'`
+#### Query 3 —**Example:** `:region_code = 'TW'`
 
 ---
 
-#### Query 4 — Given departure and arrival IATA codes, list all flights
-**Example:** `:source_iata_code = 'FCO'`, `:destination_iata_code = 'LTN'`
+#### Query 4 —**Example:** `:source_iata_code = 'FCO'`, `:destination_iata_code = 'LTN'`
 
 ---
 
-#### Query 5 — Given date + departure city + arrival city, list tickets ordered by economy price
-**Example:** `:flight_date = '2026-02-01'`, `:departure_city = 'Rome'`, `:arrival_city = 'London'`
+#### Query 5 —**Example:** `:flight_date = '2026-02-01'`, `:departure_city = 'Rome'`, `:arrival_city = 'London'`
 
 ---
 
-#### Query 6 — Continue Query 5 with departure-time-after and arrival-time-before filters
-**Example:** `:departure_time_after = '08:00:00'`, `:arrival_time_before = '23:00:00'`
+#### Query 6 —**Example:** `:departure_time_after = '08:00:00'`, `:arrival_time_before = '23:00:00'`
 
 **Note on the "arrive before 11:00" case:** because arrival times that cross midnight are stored with `arrival_day_offset = 1`, adding the condition `arrival_day_offset = 0` ensures next-day arrivals are excluded before applying the time comparison. This is both correct and efficient because `idx_ticket_arrival_lookup` covers `(arrival_time_local, arrival_day_offset)`.
 
 ---
 
 ### Task 3.3 - Advanced Requirements (10 %)
-
-This section reports the completion status of advanced requirements #2, #3, #4, and #5.
-
-| Advanced requirement | Status | Evidence |
-|---|---|---|
-| #2 Cross-system import | Completed | The same import script was tested successfully on Windows 11 and WSL2/Linux. |
-| #3 Other database / OpenGauss experiment | Not completed | OpenGauss was not installed or tested, so this report does not claim completion of this item. |
-| #4 Different or larger data volumes | Completed | The largest input file, `tickets.csv`, contains 108820 rows, and all ticket rows were imported into `ticket_inventory`. |
-| #5 Efficient import design | Completed | The import uses batch insertion, ticket-table splitting, deduplication before upsert, and measured runtime comparison. |
-
 **Test environment.** The import was tested on Windows 11 64-bit with Python 3.10.13 and on
 WSL2/Linux with Python 3.10.12. Both systems used the same source code and connected to the
 PostgreSQL database through `psycopg2`. The WSL2 environment was:
@@ -394,6 +227,13 @@ time python3 import_data.py --host localhost --port 5432 --user postgres --passw
 | WSL2/Linux | Python 3.10.12 | 5.548 seconds | Success |
 
 The same import script ran successfully on both systems without source-code changes.
+
+#### Dirty data handling
+
+- Arrival times encoded as `HH:MM(+1)` are split into a time value and an integer offset field, satisfying 1NF.  
+- Duplicate region names with different encodings are unified via the `REGION_ALIAS` dictionary.  
+- Airport IATA codes with length ≠ 3 are discarded.  
+- Seats remaining are taken as the maximum value observed across all ticket rows for a given flight, ensuring capacity is not under-estimated.
 
 ---
 
@@ -732,68 +572,6 @@ The contact-management bonus item was **not implemented** in this project. The c
 Stating this explicitly helps keep the report accurate and avoids overstating the completed scope.
 
 ---
-
-## Code Architecture
-
-The actual project is organized as a small full-stack system plus data-import scripts:
-
-```text
-DB_project_1/
-├── schema.sql                         # PostgreSQL table definitions, constraints, and indexes
-├── import_data.py                     # Builds schema and imports CSV files from Archive/
-├── cli.py                             # Command-line client for login, ticket search, booking, orders, cancellation, and admin generation
-├── task3_accuracy_queries.sql         # Required Task 3.2 SQL queries
-├── Archive/                           # Source CSV files
-├── server/
-│   ├── app/main.py                    # FastAPI application entry point
-│   ├── app/api/v1/router.py           # Combines API routers
-│   ├── app/api/v1/auth.py             # Login and admin/passenger identity checks
-│   ├── app/api/v1/tickets.py          # Ticket inventory and search endpoints
-│   ├── app/api/v1/orders.py           # Booking, order listing, and cancellation endpoints
-│   ├── app/core/config.py             # Configuration loading
-│   ├── app/core/db.py                 # PostgreSQL connection dependency
-│   ├── app/models/schemas.py          # Pydantic request/response schemas
-│   ├── app/repository/ticket_repo.py  # SQL for ticket inventory and search
-│   ├── app/repository/order_repo.py   # SQL for booking and order cancellation
-│   ├── app/services/ticket_service.py # Ticket business logic
-│   ├── app/services/order_service.py  # Order business logic
-│   └── tests/test_api.py              # Backend API tests
-└── client/
-    ├── index.html, login.html, flights.html, inventory.html, orders.html, ticket-select.html
-    ├── js/api.js                      # Browser-side API wrapper
-    ├── js/*.js                        # Page-specific frontend behavior
-    ├── style.css                      # Shared static-page styles
-    └── src/                           # React/TypeScript component version kept with the project
-```
-
-The runtime data flow is:
-
-```mermaid
-graph TD
-  A["CLI: cli.py"] -->|"HTTP requests"| B["FastAPI server"]
-  C["Browser client: client/*.html + js"] -->|"HTTP requests"| B
-  B --> D["API layer: auth.py / tickets.py / orders.py"]
-  D --> E["Service layer: ticket_service.py / order_service.py"]
-  E --> F["Repository layer: ticket_repo.py / order_repo.py"]
-  F --> G[("PostgreSQL database")]
-```
-
-This structure separates interaction surfaces from business logic: the CLI and browser client only collect user input and display results; FastAPI performs authentication and request validation; services enforce booking/cancellation rules; repositories contain SQL and transaction-sensitive database updates.
-
-From an architectural point of view, this is close to a layered MVC-style design:
-
-- View layer: CLI prompts and browser pages in `client/`
-- Controller/API layer: `auth.py`, `tickets.py`, and `orders.py`
-- Service layer: `ticket_service.py` and `order_service.py`
-- Data access layer: `ticket_repo.py` and `order_repo.py`
-- Model/schema layer: `schemas.py` plus the PostgreSQL table design
-
-This layered organization is also one of the bonus points requested in Task 4, because the program can be started once and then complete all operations through a relatively clear internal architecture.
-
-> *Attach one screenshot of the project directory tree or IDE structure view, and one screenshot of the backend/frontend running together if space allows.*
-
----
-
 ## Attachments
 
 The following files are submitted alongside this report:
@@ -811,4 +589,3 @@ DB_project_1/
 └── Archive/
 ```
 
-> **Submission reminder:** export this document to PDF, ensure screenshots are embedded, verify page count is between 10 and 16, and upload to the BB website before **23:55 on April 26, 2026 (Beijing Time, UTC+8)**.
