@@ -292,125 +292,35 @@ The script processes tables in dependency order to satisfy all foreign-key const
 
 ### Task 3.2 — Data Accuracy Checking (15 %)
 
-The following queries are stored in `task3_accuracy_queries.sql` and can be run directly in DataGrip by substituting the named parameters.
+The queries are stored in `task3_accuracy_queries.sql` and can be run directly in DataGrip by substituting the named parameters.
 
 #### Query 1 — Given a region code, list all cities
-
-```sql
-SELECT c.city_name
-FROM city c
-WHERE c.region_code = :region_code
-ORDER BY c.city_name;
-```
-
 **Example:** `:region_code = 'CN'`
 
 ---
 
 #### Query 2 — Given a city name, list all airports and IATA codes
-
-```sql
-SELECT a.airport_name, a.iata_code
-FROM airport a
-JOIN city c ON c.city_id = a.city_id
-WHERE c.city_name = :city_name
-ORDER BY a.airport_name;
-```
-
 **Example:** `:city_name = 'Taipei'`
 
 ---
 
 #### Query 3 — Given a region code, list all airlines (code + name)
-
-```sql
-SELECT al.airline_code, al.airline_name
-FROM airline al
-WHERE al.region_code = :region_code
-ORDER BY al.airline_code;
-```
-
 **Example:** `:region_code = 'TW'`
 
 ---
 
 #### Query 4 — Given departure and arrival IATA codes, list all flights
-
-```sql
-SELECT
-    f.flight_number,
-    src_city.city_name      AS source_city,
-    src_region.region_name  AS source_region,
-    dst_city.city_name      AS destination_city,
-    dst_region.region_name  AS destination_region
-FROM flight f
-JOIN airport src_air    ON src_air.airport_id  = f.source_airport_id
-JOIN city    src_city   ON src_city.city_id    = src_air.city_id
-JOIN region  src_region ON src_region.region_code = src_city.region_code
-JOIN airport dst_air    ON dst_air.airport_id  = f.destination_airport_id
-JOIN city    dst_city   ON dst_city.city_id    = dst_air.city_id
-JOIN region  dst_region ON dst_region.region_code = dst_city.region_code
-WHERE src_air.iata_code = :source_iata_code
-  AND dst_air.iata_code = :destination_iata_code
-ORDER BY f.flight_number;
-```
-
 **Example:** `:source_iata_code = 'FCO'`, `:destination_iata_code = 'LTN'`
 
 ---
 
 #### Query 5 — Given date + departure city + arrival city, list tickets ordered by economy price
-
-```sql
-SELECT
-    f.departure_time_local              AS departure_time,
-    f.arrival_time_local                AS arrive_time,
-    f.arrival_day_offset,
-    src_air.airport_name                AS departure_airport_name,
-    dst_air.airport_name                AS arrival_airport_name,
-    ti.economy_price
-FROM ticket_inventory ti
-JOIN flight   f        ON f.flight_id        = ti.flight_id
-JOIN airport  src_air  ON src_air.airport_id = f.source_airport_id
-JOIN city     src_city ON src_city.city_id   = src_air.city_id
-JOIN airport  dst_air  ON dst_air.airport_id = f.destination_airport_id
-JOIN city     dst_city ON dst_city.city_id   = dst_air.city_id
-WHERE ti.flight_date      = :flight_date
-  AND src_city.city_name  = :departure_city
-  AND dst_city.city_name  = :arrival_city
-ORDER BY ti.economy_price ASC;
-```
-
-**Example:** `:flight_date = '2026-04-10'`, `:departure_city = 'Rome'`, `:arrival_city = 'London'`
+**Example:** `:flight_date = '2026-02-01'`, `:departure_city = 'Rome'`, `:arrival_city = 'London'`
 
 ---
 
 #### Query 6 — Continue Query 5 with departure-time-after and arrival-time-before filters
-
-```sql
-SELECT
-    f.departure_time_local              AS departure_time,
-    f.arrival_time_local                AS arrive_time,
-    f.arrival_day_offset,
-    src_air.airport_name                AS departure_airport_name,
-    dst_air.airport_name                AS arrival_airport_name,
-    ti.economy_price
-FROM ticket_inventory ti
-JOIN flight   f        ON f.flight_id        = ti.flight_id
-JOIN airport  src_air  ON src_air.airport_id = f.source_airport_id
-JOIN city     src_city ON src_city.city_id   = src_air.city_id
-JOIN airport  dst_air  ON dst_air.airport_id = f.destination_airport_id
-JOIN city     dst_city ON dst_city.city_id   = dst_air.city_id
-WHERE ti.flight_date          = :flight_date
-  AND src_city.city_name      = :departure_city
-  AND dst_city.city_name      = :arrival_city
-  AND f.departure_time_local  >= :departure_time_after
-  AND f.arrival_day_offset    = 0
-  AND f.arrival_time_local    <= :arrival_time_before
-ORDER BY ti.economy_price ASC;
-```
-
-**Example:** `:departure_time_after = '08:00'`, `:arrival_time_before = '23:00'`
+**Example:** `:departure_time_after = '08:00:00'`, `:arrival_time_before = '23:00:00'`
 
 **Note on the "arrive before 11:00" case:** because arrival times that cross midnight are stored with `arrival_day_offset = 1`, adding the condition `arrival_day_offset = 0` ensures next-day arrivals are excluded before applying the time comparison. This is both correct and efficient because `idx_ticket_arrival_lookup` covers `(arrival_time_local, arrival_day_offset)`.
 
