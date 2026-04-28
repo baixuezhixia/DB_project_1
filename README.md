@@ -1,3 +1,5 @@
+<img width="1807" height="1244" alt="image" src="https://github.com/user-attachments/assets/450974d0-40ac-46c8-9c91-6e613f4df0cc" />
+
 # DB Project 1 - Complete Task Implementation
 
 This repository now contains a full PostgreSQL + Python implementation for the CS307 Project Part 1 tasks.
